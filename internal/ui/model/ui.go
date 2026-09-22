@@ -393,6 +393,17 @@ type UI struct {
 	// in-flight fetch captures it at dispatch and its result is discarded
 	// if the generation has moved on (see workspace_cache.go).
 	promptQueueGen uint64
+	// agentViews holds the cached list of agent sub-agent sessions.
+	// It is refreshed off-thread by dispatchAgentViewsRefresh and
+	// invalidated by CreatedEvent for child sessions.
+	agentViews        []session.AgentView
+	agentViewsChecked time.Time
+	agentViewsInFlight bool
+	agentViewsGen     uint64
+	// runCompletionStatuses tracks the latest run completion status per
+	// session ID ("success", "error", or empty). Updated by RunComplete
+	// events; consumed by the agent sessions sidebar renderer.
+	runCompletionStatuses map[string]string
 	// agentBusyCache / yoloCache memoize the workspace busy and permission
 	// probes (synchronous HTTP round-trips in client/server mode). Reads
 	// never probe; refreshes happen off-thread (see workspace_cache.go).
@@ -518,6 +529,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		initialSessionID:    initialSessionID,
 		continueLastSession: continueLast,
 		skillStates:         skills.GetLatestStates(),
+		runCompletionStatuses: make(map[string]string),
 	}
 
 	status := NewStatus(com, ui)
@@ -613,6 +625,10 @@ func (m *UI) Init() tea.Cmd {
 	}))
 	// Prime the memoized busy/permission state off-thread.
 	if cmd := m.dispatchBusyRefresh(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	// Prime the agent sessions list off-thread (no-op for non-root sessions).
+	if cmd := m.dispatchAgentViewsRefresh(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	// The credits balance is shown from the first frame on, so fetch it
@@ -819,6 +835,20 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	case pubsub.Event[notify.RunComplete]:
+		// Track run completion status for agent sessions sidebar.
+		rc := msg.Payload
+		if rc.Error != "" {
+			m.runCompletionStatuses[rc.SessionID] = "error"
+		} else {
+			m.runCompletionStatuses[rc.SessionID] = "success"
+		}
+		// Also refresh agent sessions if this is a child session.
+		if m.session != nil && m.session.ParentSessionID == "" {
+			m.invalidateAgentViews()
+			if cmd := m.dispatchAgentViewsRefresh(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		if cmd := m.handlePlanHandoff(msg.Payload); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -830,6 +860,16 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.applyLSPStates(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case agentViewsMsg:
+		if msg.gen == m.agentViewsGen {
+			if msg.err != nil {
+				slog.Error("Failed to load agent sessions", "error", msg.err)
+			} else {
+				m.agentViews = msg.views
+			}
+			m.agentViewsInFlight = false
+		}
+
 	case agentModelChangedMsg:
 		// The coordinator model changed (selection, thinking, reasoning):
 		// re-fetch the memoized ready/model state off-thread.
@@ -909,6 +949,12 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reload prompt history for the new session.
 		m.historyReset()
 		cmds = append(cmds, m.loadPromptHistory())
+		// Prime the agent sessions list when switching to a root session.
+		if m.session.ParentSessionID == "" {
+			if cmd := m.dispatchAgentViewsRefresh(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		m.updateLayoutAndSize()
 
 	case sessionFilesUpdatesMsg:
@@ -972,6 +1018,13 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			break
+		}
+		// Refresh agent views when a sub-agent session is created.
+		if m.session != nil && msg.Payload.ParentSessionID == m.session.ID {
+			m.invalidateAgentViews()
+			if cmd := m.dispatchAgentViewsRefresh(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 		if m.session != nil && msg.Payload.ID == m.session.ID {
 			prevHasInProgress := hasInProgressTodo(m.session.Todos)
@@ -1160,6 +1213,15 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if cmd := m.handleClickFocus(msg); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+
+		// Handle clicks on agent sessions in the sidebar.
+		if m.focus == uiFocusSidebar && msg.Button == uv.MouseLeft &&
+			m.state == uiChat && m.sidebarScrollable {
+			if cmd := m.handleSidebarSessionClick(msg); cmd != nil {
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
 		}
 
 		// Check if the click landed on an attachment's remove button.
@@ -2132,6 +2194,11 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionCycleAgents:
+		if cmd := m.cycleAgentSessions(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionToggleHelp:
 		m.status.ToggleHelp()
 		m.dialog.CloseDialog(dialog.CommandsID)
@@ -2977,6 +3044,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				cmds = append(cmds, util.ReportInfo("Yolo mode disabled"))
 			}
 			return true
+		case key.Matches(msg, m.keyMap.CycleAgents):
+			if cmd := m.cycleAgentSessions(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return true
 		}
 		return false
 	}
@@ -3322,11 +3394,6 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				m.sidebarScrollbarVisible = false
 				cmds = append(cmds, m.textarea.Focus())
 				m.chat.Blur()
-			case key.Matches(msg, m.keyMap.Chat.FocusSidebar):
-				if m.state == uiChat && !m.isCompact && m.hasSession() && m.sidebarScrollable {
-					m.focus = uiFocusSidebar
-					m.chat.Blur()
-				}
 			case key.Matches(msg, m.keyMap.Chat.NewSession):
 				if !m.hasSession() {
 					break
@@ -3409,11 +3476,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			case key.Matches(msg, m.keyMap.Chat.End):
 				m.sidebarOffset = m.sidebarMaxOffsetVal
 				m.sidebarScrollbarSeq++
-			case key.Matches(msg, m.keyMap.Chat.FocusChat):
-				m.focus = uiFocusMain
-				m.sidebarScrollbarVisible = false
-				m.chat.Focus()
-			case key.Matches(msg, m.keyMap.Tab):
+			case key.Matches(msg, m.keyMap.Chat.Tab):
 				m.focus = uiFocusEditor
 				m.sidebarScrollbarVisible = false
 				cmds = append(cmds, m.textarea.Focus())
@@ -3744,7 +3807,6 @@ func (m *UI) ShortHelp() []key.Binding {
 			binds = append(
 				binds,
 				k.Chat.UpDown,
-				k.Chat.FocusChat,
 			)
 		case uiFocusMain:
 			binds = append(
@@ -3890,11 +3952,11 @@ func (m *UI) FullHelp() [][]key.Binding {
 					k.Chat.UpDown,
 				},
 				[]key.Binding{
-					k.Chat.FocusChat,
-				},
-				[]key.Binding{
 					k.Chat.Home,
 					k.Chat.End,
+				},
+				[]key.Binding{
+					k.CycleAgents,
 				},
 			)
 		case uiFocusMain:
@@ -3912,7 +3974,6 @@ func (m *UI) FullHelp() [][]key.Binding {
 					k.Chat.Home,
 					k.Chat.End,
 					k.Chat.EndFollow,
-					k.Chat.FocusSidebar,
 				},
 				[]key.Binding{
 					k.Chat.Copy,

@@ -110,6 +110,10 @@ func (w *countingWorkspace) LSPStart(context.Context, string) {}
 
 func (w *countingWorkspace) Config() *config.Config { return nil }
 
+func (w *countingWorkspace) ListAgentSessions(context.Context, string) ([]session.AgentView, error) {
+	return nil, nil
+}
+
 // syncProbes sums every synchronous counter; Update/View must keep this at
 // zero — the invariant is that no workspace call ever happens on the Update
 // goroutine (which is also the render loop).
