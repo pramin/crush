@@ -161,7 +161,9 @@ func (m requestTimeoutModel) Stream(ctx context.Context, call fantasy.Call) (fan
 			// don't fire while the model is actively processing.
 			switch part.Type {
 			case fantasy.StreamPartTypeReasoningStart:
-				m.reasoningCount.Add(1)
+				if m.reasoningCount != nil {
+					m.reasoningCount.Add(1)
+				}
 			case fantasy.StreamPartTypeReasoningDelta:
 				if m.reasoningCount != nil && m.onReasoningDelta != nil {
 					m.reasoningCount.Add(1)
