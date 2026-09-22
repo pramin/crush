@@ -788,12 +788,27 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	var stepMessages []fantasy.Message
 	var shouldSummarize bool
 	sanitizedToolCalls := make(map[string]bool)
+	// Track reasoning deltas so the timeout wrapper can reset its idle
+	// timer while the model is actively thinking.
+	var reasoningDeltaCount atomic.Int32
+	reasoningDeltaCount.Store(0)
+	reasoningDelta := func(delta string) {
+		reasoningDeltaCount.Add(1)
+	}
+	// If the underlying model supports SetReasoningDeltaCallback, wire it
+	// so the timeout wrapper resets its idle timer during thinking.
+	if setReasoning, ok := largeModel.Model.(reasoningDeltaSetter); ok {
+		setReasoning.SetReasoningDeltaCallback(reasoningDelta)
+	}
 	// Don't send MaxOutputTokens if 0 — some providers (e.g. LM Studio) reject it
 	var maxOutputTokens *int64
 	if call.MaxOutputTokens > 0 {
 		maxOutputTokens = &call.MaxOutputTokens
 	}
-	result, err = agent.Stream(genCtx, fantasy.AgentStreamCall{
+	// Stream the request with retry for timeout errors. Extracted into a
+	// local function so the retry loop only needs to call it once.
+	streamOnce := func() (*fantasy.AgentResult, error) {
+		return agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:           message.PromptWithTextAttachments(call.Prompt, call.Attachments),
 		Files:            files,
 		Messages:         history,
@@ -1062,6 +1077,39 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			},
 		},
 	})
+	}
+
+	// Retry loop for request timeout errors. The timeout wrapper may abort
+	// a streaming request when no data arrives for the configured window.
+	// A single retry (up to 2 attempts total) gives a slow or heavily
+	// reasoning model another chance before the run fails.
+	const maxTimeoutRetries = 2
+	for attempt := 0; attempt <= maxTimeoutRetries; attempt++ {
+		if attempt > 0 {
+			slog.Warn("Request timed out, retrying",
+				"session_id", call.SessionID,
+				"attempt", attempt+1,
+				"max_retries", maxTimeoutRetries,
+			)
+			reasoningDeltaCount.Store(0)
+			currentAssistant.ResetStreamedContent()
+			if updateErr := a.messages.Update(genCtx, *currentAssistant); updateErr != nil {
+				slog.Error("Failed to reset message on retry", "error", updateErr)
+			}
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		result, err = streamOnce()
+		if err == nil {
+			break
+		}
+		var timeoutErr *requestTimeoutError
+		if !errors.As(err, &timeoutErr) {
+			break // only retry timeout errors
+		}
+		if attempt >= maxTimeoutRetries {
+			break // max retries exhausted, fall through to error handling
+		}
+	}
 
 	a.eventPromptResponded(call.SessionID, time.Since(startTime).Truncate(time.Second))
 
