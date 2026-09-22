@@ -79,6 +79,13 @@ type Service interface {
 	CreateAgentToolSessionID(messageID, toolCallID string) string
 	ParseAgentToolSessionID(sessionID string) (messageID string, toolCallID string, ok bool)
 	IsAgentToolSession(sessionID string) bool
+
+	// ReportSession marks a session as reported so the parent session can
+	// discover it in the agent sessions sidebar.
+	ReportSession(ctx context.Context, sessionID string) (Session, error)
+
+	// ListForAgent lists agent sessions for a given parent session.
+	ListForAgent(ctx context.Context, parentSessionID string) ([]AgentView, error)
 }
 
 type service struct {
@@ -365,4 +372,59 @@ func (s *service) ParseAgentToolSessionID(sessionID string) (messageID string, t
 func (s *service) IsAgentToolSession(sessionID string) bool {
 	_, _, ok := s.ParseAgentToolSessionID(sessionID)
 	return ok
+}
+
+// ReportSession marks a session as reported so the parent session can
+// discover it in the agent sessions sidebar.
+func (s *service) ReportSession(ctx context.Context, sessionID string) (Session, error) {
+	dbSession, err := s.q.UpdateSessionReported(ctx, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	return s.fromDBItem(dbSession), nil
+}
+
+// ListForAgent lists agent sessions for a given parent session.
+func (s *service) ListForAgent(ctx context.Context, parentSessionID string) ([]AgentView, error) {
+	items, err := s.q.ListAgentSessions(ctx, sql.NullString{String: parentSessionID, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	views := make([]AgentView, len(items))
+	for i, item := range items {
+		reported := item.ReportedAt.Valid && item.ReportedAt.Int64 > 0
+		parentID := ""
+		if item.ParentSessionID.Valid {
+			parentID = item.ParentSessionID.String
+		}
+		views[i] = AgentView{
+			SessionID:     item.ID,
+			ParentSession: parentID,
+			Title:         item.Title,
+			MessageCount:  int64(item.MessageCount),
+			PromptTokens:  int64(item.PromptTokens),
+			CompletionTok: int64(item.CompletionTokens),
+			IsReported:    reported,
+			IsRoot:        !item.ParentSessionID.Valid,
+			Status:        "idle",
+			UpdatedAt:     item.UpdatedAt,
+		}
+	}
+	return views, nil
+}
+
+// AgentView holds a summarized view of a session for display in the
+// agent sessions sidebar.
+type AgentView struct {
+	SessionID     string
+	ParentSession string
+	Title         string
+	MessageCount  int64
+	PromptTokens  int64
+	CompletionTok int64
+	IsReported    bool
+	IsRunning     bool
+	IsRoot        bool
+	Status        string
+	UpdatedAt     int64
 }

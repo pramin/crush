@@ -89,6 +89,14 @@ func (m *mockSessionService) IsAgentToolSession(sessionID string) bool {
 	return ok
 }
 
+func (m *mockSessionService) ListForAgent(_ context.Context, _ string) ([]session.AgentView, error) {
+	return nil, nil
+}
+
+func (m *mockSessionService) ReportSession(_ context.Context, sessionID string) (session.Session, error) {
+	return session.Session{ID: sessionID}, nil
+}
+
 func newTestApp(sessions session.Service) *App {
 	return &App{Sessions: sessions}
 }

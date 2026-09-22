@@ -72,3 +72,19 @@ WHERE id = ?;
 -- name: DeleteSession :exec
 DELETE FROM sessions
 WHERE id = ?;
+
+-- name: UpdateSessionReported :one
+UPDATE sessions
+SET reported_at = strftime('%s', 'now')
+WHERE id = ?
+RETURNING id, parent_session_id, title, message_count, prompt_tokens, completion_tokens, cost, updated_at, created_at, summary_message_id, todos, reported_at;
+
+-- name: ListAgentSessions :many
+SELECT * FROM sessions
+WHERE parent_session_id = ?
+ORDER BY
+    CASE
+        WHEN reported_at IS NULL THEN 0
+        ELSE 1
+    END,
+    updated_at DESC;

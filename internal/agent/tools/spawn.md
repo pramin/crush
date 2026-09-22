@@ -1,0 +1,1 @@
+Spawn a background sub-agent that runs independently in a new session. Returns the session ID for the sub-agent so you can track it in the agent sessions menu and switch to it later. The sub-agent runs concurrently with the main agent.
