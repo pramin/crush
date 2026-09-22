@@ -138,8 +138,20 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.updateSessionStmt, err = db.PrepareContext(ctx, updateSession); err != nil {
 		return nil, fmt.Errorf("error preparing query UpdateSession: %w", err)
 	}
+	if q.listAgentSessionsStmt, err = db.PrepareContext(ctx, listAgentSessions); err != nil {
+		return nil, fmt.Errorf("error preparing query ListAgentSessions: %w", err)
+	}
+	if q.updateSessionReportedStmt, err = db.PrepareContext(ctx, updateSessionReported); err != nil {
+		return nil, fmt.Errorf("error preparing query UpdateSessionReported: %w", err)
+	}
 	if q.updateSessionTitleAndUsageStmt, err = db.PrepareContext(ctx, updateSessionTitleAndUsage); err != nil {
 		return nil, fmt.Errorf("error preparing query UpdateSessionTitleAndUsage: %w", err)
+	}
+	if q.listAgentSessionsStmt, err = db.PrepareContext(ctx, listAgentSessions); err != nil {
+		return nil, fmt.Errorf("error preparing query ListAgentSessions: %w", err)
+	}
+	if q.updateSessionReportedStmt, err = db.PrepareContext(ctx, updateSessionReported); err != nil {
+		return nil, fmt.Errorf("error preparing query UpdateSessionReported: %w", err)
 	}
 	return &q, nil
 }
@@ -336,6 +348,16 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing updateSessionStmt: %w", cerr)
 		}
 	}
+	if q.listAgentSessionsStmt != nil {
+		if cerr := q.listAgentSessionsStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing listAgentSessionsStmt: %w", cerr)
+		}
+	}
+	if q.updateSessionReportedStmt != nil {
+		if cerr := q.updateSessionReportedStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing updateSessionReportedStmt: %w", cerr)
+		}
+	}
 	if q.updateSessionTitleAndUsageStmt != nil {
 		if cerr := q.updateSessionTitleAndUsageStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing updateSessionTitleAndUsageStmt: %w", cerr)
@@ -418,6 +440,8 @@ type Queries struct {
 	renameSessionStmt                    *sql.Stmt
 	updateMessageStmt                    *sql.Stmt
 	updateSessionStmt                    *sql.Stmt
+	listAgentSessionsStmt                *sql.Stmt
+	updateSessionReportedStmt            *sql.Stmt
 	updateSessionTitleAndUsageStmt       *sql.Stmt
 }
 
@@ -463,6 +487,8 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		renameSessionStmt:                    q.renameSessionStmt,
 		updateMessageStmt:                    q.updateMessageStmt,
 		updateSessionStmt:                    q.updateSessionStmt,
+		listAgentSessionsStmt:                q.listAgentSessionsStmt,
+		updateSessionReportedStmt:            q.updateSessionReportedStmt,
 		updateSessionTitleAndUsageStmt:       q.updateSessionTitleAndUsageStmt,
 	}
 }

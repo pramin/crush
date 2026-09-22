@@ -72,6 +72,10 @@ func (w *AppWorkspace) ParseAgentToolSessionID(sessionID string) (string, string
 	return w.app.Sessions.ParseAgentToolSessionID(sessionID)
 }
 
+func (w *AppWorkspace) ListAgentSessions(ctx context.Context, rootSessionID string) ([]session.AgentView, error) {
+	return w.app.Sessions.ListForAgent(ctx, rootSessionID)
+}
+
 // SetCurrentSession reports the active session to herdr so the pane
 // can persist a resumable reference. Multi-client presence tracking
 // is irrelevant in single-client local mode, but herdr still needs
