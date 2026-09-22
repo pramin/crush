@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
@@ -53,6 +54,11 @@ type Querier interface {
 	RenameSession(ctx context.Context, arg RenameSessionParams) error
 	UpdateMessage(ctx context.Context, arg UpdateMessageParams) error
 	UpdateSession(ctx context.Context, arg UpdateSessionParams) (Session, error)
+	// List all child sessions for a given root session.
+	// Shows all sessions (reported and unreported) ordered by activity.
+	ListAgentSessions(ctx context.Context, parentSessionID sql.NullString) ([]Session, error)
+	UpdateSessionReported(ctx context.Context, id string) (Session, error)
+
 	UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) error
 }
 

@@ -418,6 +418,13 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		// emitted, so it does not publish a duplicate fallback for the
 		// error it is about to receive.
 		MarkRunCompletePublished(ctx)
+		// Mark child sessions as reported so the parent can see them
+		// in the agent sessions sidebar.
+		if latest.SessionID != "" {
+			if sess, err := c.sessions.Get(ctx, latest.SessionID); err == nil && sess.ParentSessionID != "" {
+				_, _ = c.sessions.ReportSession(ctx, latest.SessionID)
+			}
+		}
 	}
 	return result, originalErr
 }
@@ -852,6 +859,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
+		tools.NewSpawnTool(c.sessions, c.messages, c.permissions, c.cfg.WorkingDir()),
 		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 	)

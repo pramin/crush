@@ -530,6 +530,14 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		commands = append(commands, NewCommandItem(c.com.Styles, "toggle_pills", label, "ctrl+t", ActionTogglePills{}))
 	}
 
+	// Add agent session cycling.
+	agentLabel := "Cycle Agents"
+	if !c.hasSession {
+		agentLabel = "Cycle Agents (requires session)"
+	}
+	commands = append(commands, NewCommandItem(c.com.Styles, "cycle_agents", agentLabel, "", ActionCycleAgents{}).
+		WithDescription("Switch to the next active agent session"))
+
 	// Add a command for selecting notification style via picker dialog.
 	notificationLabel := "Notification Style"
 	commands = append(commands, NewCommandItem(c.com.Styles, "select_notifications", notificationLabel, "", ActionOpenDialog{DialogID: NotificationsID}))

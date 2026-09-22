@@ -185,6 +185,10 @@ func (w *ClientWorkspace) ParseAgentToolSessionID(sessionID string) (string, str
 	return parts[0], parts[1], true
 }
 
+func (w *ClientWorkspace) ListAgentSessions(ctx context.Context, rootSessionID string) ([]session.AgentView, error) {
+	return nil, errors.New("not implemented for client workspace")
+}
+
 // SetCurrentSession reports the session this client is currently
 // viewing to the server. Empty sessionID clears the entry. Errors
 // are propagated to the caller; the TUI logs and ignores them since
